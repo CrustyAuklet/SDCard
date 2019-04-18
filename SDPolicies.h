@@ -72,10 +72,4 @@ struct SDCardPolicy {
     using writeTimeout = std::integral_constant<uint32_t, 2000>;
 };
 
-struct SDCardDebug {
-    using EnableDebug = std::true_type;
-    void debug(const char* s, const int n = 0, const int k = 0,  const int j = 0) { fprintf(stderr, s, n, k, j); }
-    void debug(const char* s, const char* c) { fprintf(stderr, s, c); }
-};
-
 #endif //SDCARD_SDPOLICIES_H

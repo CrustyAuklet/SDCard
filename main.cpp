@@ -9,13 +9,11 @@
 SPIDriver spiTester;
 std::string SpiDriverPort;
 
-uint8_t cmd0[6] = { 0x40, 0x00, 0x00, 0x00, 0x00, 0x95 };
-uint8_t cmd1[6] = { 0x41, 0x00, 0x00, 0x00, 0x00, 0xFF };
-
 int main(int argc, char *argv[])
 {
     sd::SpiCard<SPIShim, SDCardPolicy> sdCard;
-    std::array<uint8_t, 512> buf = {0};
+    std::array<uint8_t, 512> bufRead  = {0};
+    std::array<uint8_t, 512> bufWrite = {0};
 
     if (argc < 2) {
         printf("Usage: spicl <PORTNAME>\n");
@@ -28,15 +26,24 @@ int main(int argc, char *argv[])
 
     printf("SD Card was %sbegan!!! \n", beganWell ? "" : "NOT " );
 
-    uint32_t i  = 0;
+    snprintf((char*)bufWrite.data(), bufWrite.size(), "Tiglax is a stinky puppy! Tiglax is a stinky puppy! Tiglax is a stinky puppy! Tiglax is a stinky puppy!");
+
+    //sdCard.writeBlock(300, bufWrite.data());
+    sdCard.readBlock(0x300, bufRead.data());
+    sdCard.writeBlock(0x300, bufWrite.data());
+
+    uint32_t i  = 0x300;
     ssize_t  rd = 0;
+    bool write = false;
     do {
-        rd = sdCard.readBlock(i++, buf.data());
-        for(auto& c : buf) {
+        rd = sdCard.readBlock(i++, bufRead.data());
+        for(auto& c : bufRead) {
             if(std::isprint(c)) {
                 printf("%c", c);
             }
         }
+        fflush(stdout);
+        fflush(stderr);
     } while(rd > 0);
 
     return 0;
