@@ -38,7 +38,7 @@ public:
     bool readCSD(csd_t *csd); //{ return readRegister(CMD9, csd); }
 
     /// Get the number of blocks in the SD card (each block is 512 Bytes)
-    uint32_t cardCapacity();
+    uint32_t cardCapacity() { return 3906250; }
 //    {
 //        csd_t csd;
 //        return readCSD(&csd) ? sdCardCapacity(&csd) : 0;
