@@ -21,6 +21,13 @@ if(UNIX OR WIN32 OR CYGWIN OR MSYS OR MINGW)
                 main.cpp
                 external/spiDriver/spidriver.h
                 external/spiDriver/spidriver.c
+
+                external/FatLib/source/ff.c
+                external/FatLib/source/ffsystem.c
+                external/FatLib/source/ffunicode.c
+                external/FatLib/source/ffconf.h
+                external/FatLib/source/ff.h
+                external/FatLib/source/diskio.h
     )
 
     target_include_directories(SDCardTest

@@ -5,7 +5,7 @@
 #include "SDDefaultPolicies.h"
 
 #include <cstdio>
-#define SPISD_DEBUG(...)  do { fprintf(stderr, __VA_ARGS__); } while(0)
+#define SPISD_DEBUG(...)  do { fprintf(stderr, __VA_ARGS__); fflush(stderr); } while(0)
 
 namespace sd {
 
@@ -18,7 +18,7 @@ public:
     SpiCard() : m_errorCode(ErrorCode::INIT_NOT_CALLED), m_type(CardType::UNK) {}
 
     /** Initialize the SD card.
-     * \return true for success else false.
+     * @return true for success else false.
      */
     bool begin();
 
@@ -27,7 +27,7 @@ public:
      * as Manufacturer ID, Product name, Product serial number and Manufacturing date.
      * @return a copy of the CID class
      */
-    CID readCID(); //{ return readRegister(SDCMD::CMD10, cid); }
+    CID readCID() const { return readRegister(SDCMD::CMD10, cid); }
 
     /**
      * Read a card's CSD register. The CSD contains Card-Specific Data that
@@ -35,14 +35,46 @@ public:
      * @param[out] csd pointer to area for returned data.
      * @return true for success or false for failure.
      */
-    bool readCSD(csd_t *csd); //{ return readRegister(CMD9, csd); }
+    bool readCSD(csd_t *csd) const { return readRegister( SDCMD::CMD9, csd); }
 
     /// Get the number of blocks in the SD card (each block is 512 Bytes)
-    uint32_t cardCapacity() { return 3906250; }
-//    {
-//        csd_t csd;
-//        return readCSD(&csd) ? sdCardCapacity(&csd) : 0;
-//    }
+    uint32_t cardCapacity() const {
+        //return 3906250;
+        csd_t csd;
+        return readCSD(&csd) ? sdCardCapacity(&csd) : 0;
+    }
+
+    /** Determine if card supports single block erase.
+     * @return true is returned if single block erase is supported.
+     * @return false is returned if single block erase is not supported.
+     */
+    bool eraseSingleBlockEnable() {
+        csd_t csd;
+        return readCSD(&csd) ? csd.v1.erase_blk_en : false;
+    }
+
+    /** Read OCR register.
+     * @param ocr [out] Value of OCR register.
+     * @return true for success else false.
+     */
+    OCR readOCR()
+    {
+        OCR ocr;  // return value OCR register
+
+        SPIShim::select();
+        const auto r1 = cardCommand(SDCMD::CMD58, 0);
+        if(r1) {
+            SPIShim::read(ocr.rawValue, OCR::RAW_SIZE);
+        }
+        SPIShim::deSelect();
+        return ocr;
+    }
+
+    /** Return the 64 byte card status
+     * @param status [out] location for 64 status bytes.
+     * @return True is returned for success and False is returned for failure.
+     */
+    bool readStatus(uint8_t *status);
 
     /// Get the card type
     CardType type() const { return m_type; }
@@ -61,20 +93,8 @@ public:
      */
     bool erase(uint32_t firstBlock, uint32_t lastBlock);
 
-    /** Determine if card supports single block erase.
-     * @return true is returned if single block erase is supported.
-     * @return false is returned if single block erase is not supported.
-     */
-    bool eraseSingleBlockEnable();
-//    {
-//        csd_t csd;
-//        return readCSD(&csd) ? csd.v1.erase_blk_en : false;
-//    }
-
-
     /**
      * Read multiple 512 byte blocks from an SD card.
-     *
      * @param lba [in] Logical block to be read.
      * @param nb [in] Number of blocks to be read.
      * @param dst [out] Pointer to the location that will receive the data.
@@ -84,7 +104,6 @@ public:
 
     /**
      * Read a 512 byte block from an SD card.
-     *
      * @param lba [in] Logical block to be read.
      * @param dst [out] Pointer to the location that will receive the data.
      * @return The number of blocks read, or a value < 0 for an error
@@ -93,37 +112,20 @@ public:
 
     /**
      * Writes a 512 byte block to an SD card.
-     *
-     * \param[in] lba Logical block to be written.
-     * \param[in] src Pointer to the location of the data to be written.
-     * \return The value true is returned for success and
-     * the value false is returned for failure.
+     * @param lba [in] Logical block to be written.
+     * @param src [in] Pointer to the location of the data to be written.
+     * @return The value true is returned for success and the value false is returned for failure.
      */
     bool writeBlock(uint32_t lba, const uint8_t* src);
 
     /**
      * Write multiple 512 byte blocks to an SD card.
-     *
-     * \param[in] lba Logical block to be written.
-     * \param[in] nb Number of blocks to be written.
-     * \param[in] src Pointer to the location of the data to be written.
-     * \return The value true is returned for success and
-     * the value false is returned for failure.
+     * @param[in] lba Logical block to be written.
+     * @param[in] nb Number of blocks to be written.
+     * @param[in] src Pointer to the location of the data to be written.
+     * @return The value true is returned for success and the value false is returned for failure.
      */
     bool writeBlocks(uint32_t lba, const uint8_t* src, size_t nb);
-
-    /** Read OCR register.
-     *
-     * @param ocr [out] Value of OCR register.
-     * @return true for success else false.
-     */
-    bool readOCR(uint32_t *ocr);
-
-    /** Return the 64 byte card status
-     * @param status [out] location for 64 status bytes.
-     * @return True is returned for success and False is returned for failure.
-     */
-    bool readStatus(uint8_t *status);
 
 private:
     Response1 cardAcmd(SDCMD cmd, uint32_t arg)
@@ -376,6 +378,7 @@ bool SpiCard<SPIShim, SDPolicy>::begin()
         // Get the OCR to check voltage levels
         SPIShim::select();
         SPISD_DEBUG("Sending CMD58: checking OCR to see if SDHC card...\n");
+        const auto ocr = readOCR();
         r1 = cardCommand(SDCMD::CMD58, 0);
         if(r1) {
             Response3 r3;
@@ -485,14 +488,14 @@ bool SpiCard<SPIShim, SDPolicy>::writeBlock(uint32_t LBA, const uint8_t* src)
     if(!r1.ready()) {
         SPIShim::deSelect();
         SPISD_DEBUG("    Write command not ready 0x%02X\n", r1.rawStatus);
-        return -1;
+        return false;
     }
 
     spiWait(1);
 
     if(!writeData(DATA_START_BLOCK, src)) {
         SPISD_DEBUG("    Write Data Failed!\n");
-        return -1;
+        return false;
     }
 
 //    const uint8_t dt = waitResponse();
@@ -515,7 +518,7 @@ bool SpiCard<SPIShim, SDPolicy>::writeBlock(uint32_t LBA, const uint8_t* src)
 //        return -1;
 //    }
 
-    return 1;
+    return true;
 }
 
 template<class SPIShim, class SDPolicy>
@@ -607,10 +610,10 @@ bool SpiCard<SPIShim, SDPolicy>::writeData(const uint8_t token, const uint8_t* s
     SPIShim::write(token);
     SPIShim::write(src, 512);
     SPIShim::write(crc >> 8);
-    SPIShim::write(crc & 0XFF);
+    SPIShim::write(crc & 0xFF);
 
     const uint8_t status = SPIShim::read();
-    const bool success = (status & DATA_RES_MASK) != DATA_RES_ACCEPTED;
+    const bool success = (status & DATA_RES_MASK) == DATA_RES_ACCEPTED;
     if (!success) {
         SPISD_DEBUG("    BLOCK WRITE ERROR! (0x%02X)\n", status);
     }

@@ -19,7 +19,13 @@ extern std::string SpiDriverPort;
 
 struct SPIShim {
     bool active() { return spiTester.connected > 0; }
-    bool begin() { spi_connect(&spiTester, SpiDriverPort.c_str()); return active(); }
+    bool begin() {
+        if(!active()) {
+            spi_connect(&spiTester, SpiDriverPort.c_str());
+        }
+        return active();
+    }
+
     void select() { spi_sel(&spiTester); }
     void deSelect() { spi_unsel(&spiTester); }
     void write(const uint8_t* buf, const size_t LEN) { spi_write(&spiTester, (const char*)buf, LEN); }

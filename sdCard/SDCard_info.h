@@ -231,7 +231,7 @@ struct Response1 {
 
 static_assert(sizeof(Response1) == 1);
 
-struct Response3 {
+struct OCR {
     constexpr bool pwrUpStatus() const      { return rawValue[0] & (1UL<<7); }
     constexpr bool ccs() const              { return rawValue[0] & (1UL<<6); }
     constexpr bool uhs2() const             { return rawValue[0] & (1UL<<5); }
@@ -245,15 +245,15 @@ struct Response3 {
     static_assert(sizeof(Response3) == 4);
 
 /** start data token for read or write single block*/
-constexpr uint8_t DATA_START_BLOCK = 0XFE;
+constexpr uint8_t DATA_START_BLOCK = 0xFE;
 /** stop token for write multiple blocks*/
-constexpr uint8_t STOP_TRAN_TOKEN = 0XFD;
+constexpr uint8_t STOP_TRAN_TOKEN = 0xFD;
 /** start data token for write multiple blocks*/
-constexpr uint8_t WRITE_MULTIPLE_TOKEN = 0XFC;
+constexpr uint8_t WRITE_MULTIPLE_TOKEN = 0xFC;
 /** mask for data response tokens after a write block operation */
-constexpr uint8_t DATA_RES_MASK = 0X1F;
+constexpr uint8_t DATA_RES_MASK = 0x1F;
 /** write data accepted token */
-constexpr uint8_t DATA_RES_ACCEPTED = 0X05;
+constexpr uint8_t DATA_RES_ACCEPTED = 0x05;
 
 /**
  * @brief Card IDentification (CID) register.
