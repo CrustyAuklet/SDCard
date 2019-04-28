@@ -39,23 +39,6 @@ namespace sd {
             }
             return crc;
         }
-
-        // timout values and time types
-        using timeType = std::chrono::milliseconds::rep;
-
-        timeType getTime() {
-            return std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::system_clock::now().time_since_epoch()).count();
-        }
-
-        bool isTimedOut(const timeType t0, const uint32_t Timeout) { return (getTime() - t0) > Timeout; }
-
-        using cmd0_retry   = std::integral_constant<uint8_t,  10>;
-        using cmdTimeout   = std::integral_constant<uint32_t, 300>;
-        using initTimeout  = std::integral_constant<uint32_t, 2000>;
-        using eraseTimeout = std::integral_constant<uint32_t, 10000>;
-        using readTimeout  = std::integral_constant<uint32_t, 1000>;
-        using writeTimeout = std::integral_constant<uint32_t, 2000>;
     };
 
     struct tableBasedCRC {

@@ -28,9 +28,9 @@ struct SPIShim {
 
     void select() { spi_sel(&spiTester); }
     void deSelect() { spi_unsel(&spiTester); }
-    void write(const uint8_t* buf, const size_t LEN) { spi_write(&spiTester, (const char*)buf, LEN); }
+    ssize_t write(const uint8_t* buf, const size_t LEN) { spi_write(&spiTester, (const char*)buf, LEN); return LEN; }
     uint8_t write(uint8_t val) { return read(val); }
-    void read(uint8_t* buf, const size_t LEN) { spi_read(&spiTester, (char*)buf, LEN); }
+    ssize_t read(uint8_t* buf, const size_t LEN) { spi_read(&spiTester, (char*)buf, LEN); return LEN; }
     uint8_t read(uint8_t val = 0xFF) { spi_writeread(&spiTester, (char*)(&val), 1); return val; }
 };
 

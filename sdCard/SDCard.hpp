@@ -1,6 +1,7 @@
 #ifndef SDCARD_SPI_H
 #define SDCARD_SPI_H
 #include <stddef.h>
+#include <optional>
 #include "SDCard_info.h"
 #include "SDDefaultPolicies.h"
 
@@ -9,13 +10,13 @@
 
 namespace sd {
 
-template<class SPIShim, class SDPolicy = sd::ShiftedCRC >
-class SpiCard : private SPIShim, SDPolicy {
+template<class SPIShim, class SDPolicy = sd::ShiftedCRC, class TimeoutPolicy = sd::CountBasedTimouts >
+class SpiCard : private SPIShim, SDPolicy, TimeoutPolicy {
 public:
-    using SDPolicyTimeType = typename SDPolicy::timeType;
+    using SDPolicyTimeType = typename TimeoutPolicy::timeType;
 
     /// constructor
-    SpiCard() : m_errorCode(ErrorCode::INIT_NOT_CALLED), m_type(CardType::UNK) {}
+    SpiCard() noexcept : m_errorCode(ErrorCode::INIT_NOT_CALLED), m_type(CardType::UNK) {}
 
     /** Initialize the SD card.
      * @return true for success else false.
@@ -25,9 +26,9 @@ public:
     /**
      * Read a card's CID register. The CID contains card identification information such
      * as Manufacturer ID, Product name, Product serial number and Manufacturing date.
-     * @return a copy of the CID class
+     * @return a copy of the CID class in a std::optional wrapper
      */
-    CID readCID() const { return readRegister(SDCMD::CMD10, cid); }
+    std::optional<CID> readCID();
 
     /**
      * Read a card's CSD register. The CSD contains Card-Specific Data that
@@ -35,40 +36,28 @@ public:
      * @param[out] csd pointer to area for returned data.
      * @return true for success or false for failure.
      */
-    bool readCSD(csd_t *csd) const { return readRegister( SDCMD::CMD9, csd); }
+    std::optional<CSD> readCSD();
 
     /// Get the number of blocks in the SD card (each block is 512 Bytes)
-    uint32_t cardCapacity() const {
-        //return 3906250;
-        csd_t csd;
-        return readCSD(&csd) ? sdCardCapacity(&csd) : 0;
+    std::optional<uint32_t> cardCapacity() {
+        const auto csd = readCSD();
+        return csd.has_value() ? std::optional<uint32_t>(csd->blockCount()) : std::optional<uint32_t>();
     }
 
     /** Determine if card supports single block erase.
      * @return true is returned if single block erase is supported.
      * @return false is returned if single block erase is not supported.
      */
-    bool eraseSingleBlockEnable() {
-        csd_t csd;
-        return readCSD(&csd) ? csd.v1.erase_blk_en : false;
+    bool eraseSingleBlockEnable() const {
+        const auto csd = readCSD();
+        return csd.has_value() ? csd->eraseBlockEnabled() : false;
     }
 
     /** Read OCR register.
      * @param ocr [out] Value of OCR register.
      * @return true for success else false.
      */
-    OCR readOCR()
-    {
-        OCR ocr;  // return value OCR register
-
-        SPIShim::select();
-        const auto r1 = cardCommand(SDCMD::CMD58, 0);
-        if(r1) {
-            SPIShim::read(ocr.rawValue, OCR::RAW_SIZE);
-        }
-        SPIShim::deSelect();
-        return ocr;
-    }
+    std::optional<OCR> readOCR();
 
     /** Return the 64 byte card status
      * @param status [out] location for 64 status bytes.
@@ -138,7 +127,7 @@ private:
     {
         // wait if busy unless CMD0
         if (cmd != SDCMD::CMD0) {
-            waitNotBusy(SDPolicy::cmdTimeout::value);
+            waitNotBusy(TimeoutPolicy::cmdTimeout::value);
         }
 
         if(SDPolicy::useCRC7) {
@@ -182,10 +171,10 @@ private:
      */
     bool waitNotBusy(uint16_t timeoutMS)
     {
-        SDPolicyTimeType t0 = SDPolicy::getTime();
+        SDPolicyTimeType t0 = TimeoutPolicy::getTime();
         // Check not busy first since yield is not called in isTimedOut.
         while (SPIShim::read() != 0XFF) {
-            if (SDPolicy::isTimedOut(t0, timeoutMS)) {
+            if (TimeoutPolicy::isTimedOut(t0, timeoutMS)) {
                 return false;
             }
         }
@@ -210,26 +199,14 @@ private:
         return response == 0xFF;
     }
 
-    /// SPI function to wait till chip is ready and sends start token. Times out after 300ms.
-    bool waitToken(uint8_t token)
-    {
-        const auto endTime = SDPolicy::getTime() + SDPolicy::cmdTimeout::value;
-        do {
-            if (token == SPIShim::write(0xFF)) {
-                return true;
-            }
-        } while ( SDPolicy::getTime() < endTime );       // Wait for 300 msec for start token
-        SPISD_DEBUG("Timeout: waiting for token 0x%02X\n", token);
-        return false;
-    }
-
     uint8_t waitResponse()
     {
         uint8_t response;
-        const auto endTime = SDPolicy::getTime() + SDPolicy::cmdTimeout::value;
+        auto t0 = TimeoutPolicy::getTime();
+        const auto endTime = t0 + TimeoutPolicy::cmdTimeout::value;
         do {
             response = SPIShim::write(0xFF);
-        } while(response == 0xFF && SDPolicy::getTime() < endTime );
+        } while(response == 0xFF && !TimeoutPolicy::isTimedOut(t0, endTime) );
         return response;
     }
 
@@ -262,8 +239,8 @@ private:
     CardType        m_type;
 };
 
-template<class SPIShim, class SDPolicy>
-bool SpiCard<SPIShim, SDPolicy>::begin()
+template<class SPIShim, class SDPolicy, class TimeoutPolicy >
+bool SpiCard<SPIShim, SDPolicy, TimeoutPolicy>::begin()
 {
     m_errorCode = ErrorCode::NONE;
     m_type      = CardType::UNK;
@@ -281,14 +258,14 @@ bool SpiCard<SPIShim, SDPolicy>::begin()
     // Set Idle state: If MCU is reset but SD card is not, it may ignore the first CMD0
     // TODO: better loop (without break) and more checks from other drivers
 
-    for (int i = 0; i < SDPolicy::cmd0_retry::value; i++) {
+    for (int i = 0; i < TimeoutPolicy::cmd0_retry::value; i++) {
         SPISD_DEBUG("Sending CMD0: Set to idle state...\n");
 
         spiWait(4);
         SPIShim::select();
         r1 = cardCommand( SDCMD::CMD0 );
         SPIShim::deSelect();
-        spiWait(4);
+        spiWait(2);
 
         if (r1.idle()) {
             SPISD_DEBUG("    CMD0 Success!\n");
@@ -302,6 +279,7 @@ bool SpiCard<SPIShim, SDPolicy>::begin()
             SPIShim::read();
         }
         SPIShim::deSelect();
+        spiWait(2);
     }
 
 
@@ -351,9 +329,7 @@ bool SpiCard<SPIShim, SDPolicy>::begin()
         }
     }
     SPIShim::deSelect();
-
-    // give the card some clocks
-    spiWait(4);
+    spiWait(2);
 
     // initialize card and send host supports SDHC if SD2
     // TODO: check CMD1 for old cards if ACMD41 returns an error or no response
@@ -361,7 +337,6 @@ bool SpiCard<SPIShim, SDPolicy>::begin()
     for(int i = 0; i < 3 && !r1.ready(); ++i ) {
         SPISD_DEBUG("Sending ACMD41: activate card init %s...\n", (arg == 0 ? "" : "and asserting SDHC capabilty" ) );
 
-        spiWait(2);
         SPIShim::select();
         r1 = cardAcmd(SDCMD::ACMD41, arg);
         SPIShim::deSelect();
@@ -379,20 +354,18 @@ bool SpiCard<SPIShim, SDPolicy>::begin()
         SPIShim::select();
         SPISD_DEBUG("Sending CMD58: checking OCR to see if SDHC card...\n");
         const auto ocr = readOCR();
-        r1 = cardCommand(SDCMD::CMD58, 0);
-        if(r1) {
-            Response3 r3;
-            SPIShim::read(r3.rawValue, Response3::RAW_SIZE);
-            if(r3.ccs() && r3.pwrUpStatus()) {
+        if(ocr.has_value()) {
+            if(ocr->ccs() && ocr->pwrUpStatus()) {
                 m_type = CardType::SDHC;
             }
             SPISD_DEBUG("    OCR: 0x04X ... %s type card\n", (m_type == CardType::SDHC ? "SDHC" : "non-SDHC") );
         }
         else {
-            SPISD_DEBUG("    No valid response from CMD58!\n");
+            SPISD_DEBUG("Failed to receive OCR!\n");
             return false;
         }
         SPIShim::deSelect();
+        spiWait(2);
     }
 
     // set block size to 512 for older cards
@@ -412,8 +385,61 @@ bool SpiCard<SPIShim, SDPolicy>::begin()
     return true;
 }
 
-template<class SPIShim, class SDPolicy>
-ssize_t SpiCard<SPIShim, SDPolicy>::readBlocks(const uint32_t LBA, uint8_t* buf, const size_t LEN)
+template<class SPIShim, class SDPolicy, class TimeoutPolicy >
+std::optional<CID> SpiCard<SPIShim, SDPolicy, TimeoutPolicy>::readCID()
+{
+    CID cid;
+    bool success = false;
+
+    SPIShim::select();
+    const auto r1 = cardCommand(SDCMD::CMD10, 0);
+    if(r1) {
+        const auto dt = waitResponse();
+        if(DATA_START_BLOCK == dt) {
+            success = SPIShim::read(cid.raw.data(), cid.raw.size());
+        }
+    }
+    SPIShim::deSelect();
+    spiWait(2);
+    return success ? std::optional<CID>(cid) : std::optional<CID>();
+}
+
+template<class SPIShim, class SDPolicy, class TimeoutPolicy >
+std::optional<CSD> SpiCard<SPIShim, SDPolicy, TimeoutPolicy>::readCSD()
+{
+    CSD csd;
+    bool success = false;
+
+    SPIShim::select();
+    const auto r1 = cardCommand(SDCMD::CMD9, 0);
+    if(r1) {
+        const auto dt = waitResponse();
+        if(DATA_START_BLOCK == dt) {
+            success = SPIShim::read(csd.raw.data(), csd.raw.size());
+        }
+    }
+    SPIShim::deSelect();
+    spiWait(2);
+    return success ? std::optional<CSD>(csd) : std::optional<CSD>();
+}
+
+template<class SPIShim, class SDPolicy, class TimeoutPolicy >
+std::optional<OCR> SpiCard<SPIShim, SDPolicy, TimeoutPolicy>::readOCR()
+{
+    OCR ocr;  // return value OCR register
+    bool success = false;
+
+    SPIShim::select();
+    if(const auto r1 = cardCommand(SDCMD::CMD58, 0); r1) {
+        success = SPIShim::read(ocr.raw.data(), ocr.raw.size());
+    }
+    SPIShim::deSelect();
+    spiWait(2);
+    return success ? std::optional<OCR>(ocr) : std::optional<OCR>();
+}
+
+template<class SPIShim, class SDPolicy, class TimeoutPolicy >
+ssize_t SpiCard<SPIShim, SDPolicy, TimeoutPolicy>::readBlocks(const uint32_t LBA, uint8_t* buf, const size_t LEN)
 {
     // cmd18 for reading multiple blocks, otherwise single block read
     const SDCMD readCommand = (LEN > 1 ? SDCMD::CMD18 : SDCMD::CMD17);
@@ -427,6 +453,7 @@ ssize_t SpiCard<SPIShim, SDPolicy>::readBlocks(const uint32_t LBA, uint8_t* buf,
 
         if(!r1.ready()) {
             SPIShim::deSelect();
+            spiWait(2);
             SPISD_DEBUG("    Read command not ready 0x%02X\n", r1.rawStatus);
             return -1;
         }
@@ -446,8 +473,8 @@ ssize_t SpiCard<SPIShim, SDPolicy>::readBlocks(const uint32_t LBA, uint8_t* buf,
     return readCount;
 }
 
-template<class SPIShim, class SDPolicy>
-ssize_t SpiCard<SPIShim, SDPolicy>::readBlock(uint32_t LBA, uint8_t* buf)
+template<class SPIShim, class SDPolicy, class TimeoutPolicy >
+ssize_t SpiCard<SPIShim, SDPolicy, TimeoutPolicy>::readBlock(uint32_t LBA, uint8_t* buf)
 {
     SPISD_DEBUG("ReadBlock: LBA 0x%08X ...\n", LBA);
     if(m_type != CardType::SDHC) {
@@ -462,6 +489,7 @@ ssize_t SpiCard<SPIShim, SDPolicy>::readBlock(uint32_t LBA, uint8_t* buf)
 
     if(!r1.ready()) {
         SPIShim::deSelect();
+        spiWait(2);
         SPISD_DEBUG("    Read command not ready 0x%02X\n", r1.rawStatus);
         return -1;
     }
@@ -471,8 +499,8 @@ ssize_t SpiCard<SPIShim, SDPolicy>::readBlock(uint32_t LBA, uint8_t* buf)
     return readSuccess ? 1 : 0;
 }
 
-template<class SPIShim, class SDPolicy>
-bool SpiCard<SPIShim, SDPolicy>::writeBlock(uint32_t LBA, const uint8_t* src)
+template<class SPIShim, class SDPolicy, class TimeoutPolicy >
+bool SpiCard<SPIShim, SDPolicy, TimeoutPolicy>::writeBlock(uint32_t LBA, const uint8_t* src)
 {
     SPISD_DEBUG("WriteBlock: LBA 0x%08X ...\n", LBA);
     if(m_type != CardType::SDHC) {
@@ -487,6 +515,7 @@ bool SpiCard<SPIShim, SDPolicy>::writeBlock(uint32_t LBA, const uint8_t* src)
 
     if(!r1.ready()) {
         SPIShim::deSelect();
+        spiWait(2);
         SPISD_DEBUG("    Write command not ready 0x%02X\n", r1.rawStatus);
         return false;
     }
@@ -499,7 +528,7 @@ bool SpiCard<SPIShim, SDPolicy>::writeBlock(uint32_t LBA, const uint8_t* src)
     }
 
 //    const uint8_t dt = waitResponse();
-//    if(0xFE == dt) {
+//    if(DATA_START_BLOCK == dt) {
 //        SPIShim::read(buf, 512);
 //
 //        const uint16_t crc = (SPIShim::read() << 8) | SPIShim::read();
@@ -521,8 +550,8 @@ bool SpiCard<SPIShim, SDPolicy>::writeBlock(uint32_t LBA, const uint8_t* src)
     return true;
 }
 
-template<class SPIShim, class SDPolicy>
-bool SpiCard<SPIShim, SDPolicy>::readStart(uint32_t blockNumber)
+template<class SPIShim, class SDPolicy, class TimeoutPolicy >
+bool SpiCard<SPIShim, SDPolicy, TimeoutPolicy>::readStart(uint32_t blockNumber)
 {
     SPISD_DEBUG("Read Start: Block 0x%08X\n", blockNumber);
     // use address if not SDHC card
@@ -535,14 +564,14 @@ bool SpiCard<SPIShim, SDPolicy>::readStart(uint32_t blockNumber)
     return r;
 }
 
-template<class SPIShim, class SDPolicy>
-bool SpiCard<SPIShim, SDPolicy>::readData(uint8_t* buf)
+template<class SPIShim, class SDPolicy, class TimeoutPolicy >
+bool SpiCard<SPIShim, SDPolicy, TimeoutPolicy>::readData(uint8_t* buf)
 {
     return readData(buf, 512);
 }
 
-template<class SPIShim, class SDPolicy>
-bool SpiCard<SPIShim, SDPolicy>::readData(uint8_t* buf, const size_t COUNT)
+template<class SPIShim, class SDPolicy, class TimeoutPolicy >
+bool SpiCard<SPIShim, SDPolicy, TimeoutPolicy>::readData(uint8_t* buf, const size_t COUNT)
 {
     const uint8_t dt = waitResponse();
     if(DATA_START_BLOCK == dt) {
@@ -550,6 +579,7 @@ bool SpiCard<SPIShim, SDPolicy>::readData(uint8_t* buf, const size_t COUNT)
 
         const uint16_t crc = (SPIShim::read() << 8) | SPIShim::read();
         SPIShim::deSelect();
+        spiWait(2);
 
         if( SDPolicy::useCRC16 && (crc != SDPolicy::CRC_CCITT(buf, 512)) ) {
             SPISD_DEBUG("    CRC check failed! (0x%04X)\n", crc);
@@ -566,8 +596,8 @@ bool SpiCard<SPIShim, SDPolicy>::readData(uint8_t* buf, const size_t COUNT)
     return false;
 }
 
-template<class SPIShim, class SDPolicy>
-bool SpiCard<SPIShim, SDPolicy>::readStop()
+template<class SPIShim, class SDPolicy, class TimeoutPolicy >
+bool SpiCard<SPIShim, SDPolicy, TimeoutPolicy>::readStop()
 {
     const auto r = cardCommand(SDCMD::CMD12);
     if(!r.ready()) {
@@ -576,8 +606,8 @@ bool SpiCard<SPIShim, SDPolicy>::readStop()
     return r.ready();
 }
 
-template<class SPIShim, class SDPolicy>
-bool SpiCard<SPIShim, SDPolicy>::writeStart(uint32_t blockNumber)
+template<class SPIShim, class SDPolicy, class TimeoutPolicy >
+bool SpiCard<SPIShim, SDPolicy, TimeoutPolicy>::writeStart(uint32_t blockNumber)
 {
     // use address if not SDHC card
     if (m_type != CardType::SDHC) {
@@ -589,8 +619,8 @@ bool SpiCard<SPIShim, SDPolicy>::writeStart(uint32_t blockNumber)
     return r;
 }
 
-template<class SPIShim, class SDPolicy>
-bool SpiCard<SPIShim, SDPolicy>::writeStart(uint32_t blockNumber, const uint32_t eraseCount)
+template<class SPIShim, class SDPolicy, class TimeoutPolicy >
+bool SpiCard<SPIShim, SDPolicy, TimeoutPolicy>::writeStart(uint32_t blockNumber, const uint32_t eraseCount)
 {
     // send pre-erase count
     const auto r = cardAcmd( SDCMD::ACMD23, eraseCount);
@@ -602,8 +632,8 @@ bool SpiCard<SPIShim, SDPolicy>::writeStart(uint32_t blockNumber, const uint32_t
     return writeStart(blockNumber);
 }
 
-template<class SPIShim, class SDPolicy>
-bool SpiCard<SPIShim, SDPolicy>::writeData(const uint8_t token, const uint8_t* src)
+template<class SPIShim, class SDPolicy, class TimeoutPolicy >
+bool SpiCard<SPIShim, SDPolicy, TimeoutPolicy>::writeData(const uint8_t token, const uint8_t* src)
 {
     const uint16_t crc = SDPolicy::CRC_CCITT(src, 512);
 
@@ -620,8 +650,8 @@ bool SpiCard<SPIShim, SDPolicy>::writeData(const uint8_t token, const uint8_t* s
     return success;
 }
 
-template<class SPIShim, class SDPolicy>
-bool SpiCard<SPIShim, SDPolicy>::writeStop()
+template<class SPIShim, class SDPolicy, class TimeoutPolicy >
+bool SpiCard<SPIShim, SDPolicy, TimeoutPolicy>::writeStop()
 {
     if (!waitNotBusy(SDPolicy::writeTimeout)) {
         SPISD_DEBUG("    Write Stop: SD card timed out as busy!\n");

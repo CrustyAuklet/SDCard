@@ -4,6 +4,7 @@
 #include <cctype>
 #include <array>
 #include <time.h>
+#include <SDCard_info.h>
 #include "SDPolicies.h"
 #include "SDCard.hpp"
 
@@ -41,35 +42,59 @@ int main(int argc, char *argv[])
     int rc;
     DWORD buff[FF_MAX_SS];  /* Working buffer (4 sector in size) */
 
+    sdcard.begin();
+
+    auto ocr = sdcard.readOCR();
+    printf("ocr: 0x%02X %02X %02X %02X\n", ocr->raw[0], ocr->raw[1], ocr->raw[2], ocr->raw[3]);
+
+    auto cid = sdcard.readCID();
+    printf("cid: 0x");
+    for(const auto &c : cid->raw ) {
+        printf("%02X", c);
+    }
+    printf("\n");
+
+    auto csd = sdcard.readCSD();
+    printf("csd: 0x");
+    for(const auto &c : csd->raw ) {
+        printf("%02X", c);
+    }
+    printf("\n");
+
+    printf("Block Count: %d\n", csd->blockCount());
+    printf("CardSize: %d\n", csd->cardCapacity());
+
     /* Check function/compatibility of the physical drive #0 */
 //    rc = test_diskio(0, 3, buff, sizeof buff);
 //
 //    if (rc) {
 //        printf("Sorry the function/compatibility test failed. (rc=%d)\nFatFs will not work with this disk driver.\n", rc);
 //    } else {
-        printf("Congratulations! The disk driver works well.\n");
-        BYTE Buff[4096];	/* Working buffer */
-        FATFS FatFs;		/* FatFs work area needed for each volume */
-        FIL Fil;			/* File object needed for each open file */
-        UINT bw;
 
-        f_mount(&FatFs, "", 0);		/* Give a work area to the default drive */
 
-        auto status = f_open(&Fil, "newfile.txt", FA_WRITE | FA_CREATE_ALWAYS);
-
-        if(status == FR_NO_FILESYSTEM) {
-            status = f_mkfs("", FM_FAT32, 0, Buff, 4096);
-            status = f_open(&Fil, "newfile.txt", FA_WRITE | FA_CREATE_ALWAYS);
-        }
-
-        if (status == FR_OK) {	/* Create a file */
-
-            f_write(&Fil, "It works!\r\n", 11, &bw);	/* Write data to the file */
-
-            f_close(&Fil);								/* Close the file */
-
-        }
-//    }
+//        printf("Congratulations! The disk driver works well.\n");
+//        BYTE Buff[4096];	/* Working buffer */
+//        FATFS FatFs;		/* FatFs work area needed for each volume */
+//        FIL Fil;			/* File object needed for each open file */
+//        UINT bw;
+//
+//        f_mount(&FatFs, "", 0);		/* Give a work area to the default drive */
+//
+//        auto status = f_open(&Fil, "newfile.txt", FA_WRITE | FA_CREATE_ALWAYS);
+//
+//        if(status == FR_NO_FILESYSTEM) {
+//            status = f_mkfs("", FM_FAT32, 0, Buff, 4096);
+//            status = f_open(&Fil, "newfile.txt", FA_WRITE | FA_CREATE_ALWAYS);
+//        }
+//
+//        if (status == FR_OK) {	/* Create a file */
+//
+//            f_write(&Fil, "It works!\r\n", 11, &bw);	/* Write data to the file */
+//
+//            f_close(&Fil);								/* Close the file */
+//
+//        }
+////    }
 
     return 0;
 }
@@ -139,7 +164,7 @@ DRESULT disk_ioctl (
         case CTRL_SYNC :
             break;
         case GET_SECTOR_COUNT :
-            *((DWORD*)buff) = sdcard.cardCapacity();
+            *((DWORD*)buff) = *(sdcard.cardCapacity());
             break;
         case GET_SECTOR_SIZE :
         case GET_BLOCK_SIZE :

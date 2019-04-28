@@ -134,6 +134,17 @@ enum class SDCMD : uint8_t {
     ACMD41 = 0x29,    //< SD_SEND_OP_COMD - Sends host capacity support information and activates the card's initialization process
 };
 
+/** start data token for read or write single block*/
+constexpr uint8_t DATA_START_BLOCK = 0xFE;
+/** stop token for write multiple blocks*/
+constexpr uint8_t STOP_TRAN_TOKEN = 0xFD;
+/** start data token for write multiple blocks*/
+constexpr uint8_t WRITE_MULTIPLE_TOKEN = 0xFC;
+/** mask for data response tokens after a write block operation */
+constexpr uint8_t DATA_RES_MASK = 0x1F;
+/** write data accepted token */
+constexpr uint8_t DATA_RES_ACCEPTED = 0x05;
+
 // CARD_STATUS
 struct CardStatus {
     explicit CardStatus(const uint8_t s) : rawStatus(s) {}
@@ -206,7 +217,7 @@ struct CardStatus {
     uint32_t rawStatus;     //< the raw status received
 };
 
-static_assert(sizeof(CardStatus) == 4);
+static_assert(sizeof(CardStatus) == 4, "CardStatus response must be 4 bytes!");
 
 struct Response1 {
     explicit Response1(const uint8_t s) : rawStatus(s) {}
@@ -229,243 +240,153 @@ struct Response1 {
     uint8_t rawStatus;  //< raw status from device
 };
 
-static_assert(sizeof(Response1) == 1);
+static_assert(sizeof(Response1) == 1, "Response1 must be 1 byte!");
 
 struct OCR {
-    constexpr bool pwrUpStatus() const      { return rawValue[0] & (1UL<<7); }
-    constexpr bool ccs() const              { return rawValue[0] & (1UL<<6); }
-    constexpr bool uhs2() const             { return rawValue[0] & (1UL<<5); }
-    constexpr bool canSwitch1v8() const     { return rawValue[0] & (1UL<<0); }
-    constexpr uint16_t vRange() const       { return ( (((uint16_t)rawValue[1])<<1) | (rawValue[2]>>7) ); }
+    constexpr bool pwrUpStatus() const      { return raw[0] & (1UL<<7); }
+    constexpr bool ccs() const              { return raw[0] & (1UL<<6); }
+    constexpr bool uhs2() const             { return raw[0] & (1UL<<5); }
+    constexpr bool canSwitch1v8() const     { return raw[0] & (1UL<<0); }
+    constexpr uint16_t vRange() const       { return ( (((uint16_t)raw[1])<<1) | (raw[2]>>7) ); }
 
-    static constexpr uint8_t RAW_SIZE = 4;
-    uint8_t rawValue[RAW_SIZE];         //< raw OCR status
+    std::array<uint8_t, 4> raw; //< raw OCR status
 };
 
-    static_assert(sizeof(Response3) == 4);
-
-/** start data token for read or write single block*/
-constexpr uint8_t DATA_START_BLOCK = 0xFE;
-/** stop token for write multiple blocks*/
-constexpr uint8_t STOP_TRAN_TOKEN = 0xFD;
-/** start data token for write multiple blocks*/
-constexpr uint8_t WRITE_MULTIPLE_TOKEN = 0xFC;
-/** mask for data response tokens after a write block operation */
-constexpr uint8_t DATA_RES_MASK = 0x1F;
-/** write data accepted token */
-constexpr uint8_t DATA_RES_ACCEPTED = 0x05;
+static_assert(sizeof(OCR) == 4, "OCR response must be 4 bytes!");
 
 /**
  * @brief Card IDentification (CID) register.
  */
 struct CID {
+    /// Manufacturer ID
+    constexpr uint8_t mid() const { return raw[0]; }
+    /// OEM / Application ID
+    constexpr uint8_t oid() const { return (raw[1]<<8) | raw[2]; }
+    /// product name (use array_view if we add GSL as dependancy or get C++20?)
+    std::array<uint8_t, 5> productName() const {
+        return std::array<uint8_t, 5>{ raw[3], raw[4], raw[5], raw[6], raw[7] };
+    }
+
     /// get the product revision as floating point number
     constexpr float ProductRevision() const { return ProductRev_Major() + (ProductRev_Minor()/10); }
     /// get product revision major number
-    constexpr unsigned ProductRev_Major() const { return ((prv&0xF0)>>4); }
+    constexpr unsigned ProductRev_Major() const { return ((raw[8]&0xF0)>>4); }
     /// get product revision minor number
-    constexpr unsigned ProductRev_Minor() const { return (prv&0x0F); }
+    constexpr unsigned ProductRev_Minor() const { return (raw[8]&0x0F); }
+
+    /// product name (use array_view if we add GSL as dependancy or get C++20?)
+    constexpr uint32_t SerialNumber() const {
+        return (raw[9]<<24) | (raw[12]<<16) | (raw[13]<<8) | (raw[14]);
+    }
+
     /// Manufacture Month
-    constexpr unsigned ManufMonth() const { return (manufDate & 0x0F00)>>8; }
+    constexpr unsigned ManufMonth() const { return (raw[13] & 0x0F) ;} // (manufDate & 0x0F00)>>8
     /// Manufacture Year
-    constexpr unsigned ManufYear() const { return (manufDate & 0x00FF) + 2000; }
+    constexpr unsigned ManufYear() const { return raw[14]+ 2000; }
     /// Get the CRC value
-    constexpr uint8_t getCRC7() const { return (crc7&0xFE)>>1; }
+    constexpr uint8_t getCRC7() const { return (raw[15]&0xFE)>>1; }
     /// check the CRC7 value against provided value
-    constexpr uint8_t checkCRC7(const uint8_t refCrc7) const { return getCRC7() == refCrc7; }
+    constexpr bool checkCRC7(const uint8_t refCrc7) const { return getCRC7() == refCrc7; }
 
-    uint8_t  mid;       //< manufacturer ID
-    uint8_t  oid[2];    //< OEM/Application ID
-    uint8_t  name[5];   //< Product Name
-    uint8_t  prv;       //< product revision
-    uint32_t psn;       //< Product Serial Number
-    uint16_t manufDate; //< manufacturing Date
-    uint8_t  crc7;      //< CRC7 checksum
-} __attribute__((packed)) ;
-
-static_assert(sizeof(CID) == 16);
-
-/**
- * \brief CSD register for version 1.00 cards .
- */
-typedef struct CSDV1 {
-  // byte 0
-  unsigned char reserved1 : 6;
-  unsigned char csd_ver : 2;
-  // byte 1
-  unsigned char taac;
-  // byte 2
-  unsigned char nsac;
-  // byte 3
-  unsigned char tran_speed;
-  // byte 4
-  unsigned char ccc_high;
-  // byte 5
-  unsigned char read_bl_len : 4;
-  unsigned char ccc_low : 4;
-  // byte 6
-  unsigned char c_size_high : 2;
-  unsigned char reserved2 : 2;
-  unsigned char dsr_imp : 1;
-  unsigned char read_blk_misalign : 1;
-  unsigned char write_blk_misalign : 1;
-  unsigned char read_bl_partial : 1;
-  // byte 7
-  unsigned char c_size_mid;
-  // byte 8
-  unsigned char vdd_r_curr_max : 3;
-  unsigned char vdd_r_curr_min : 3;
-  unsigned char c_size_low : 2;
-  // byte 9
-  unsigned char c_size_mult_high : 2;
-  unsigned char vdd_w_cur_max : 3;
-  unsigned char vdd_w_curr_min : 3;
-  // byte 10
-  unsigned char sector_size_high : 6;
-  unsigned char erase_blk_en : 1;
-  unsigned char c_size_mult_low : 1;
-  // byte 11
-  unsigned char wp_grp_size : 7;
-  unsigned char sector_size_low : 1;
-  // byte 12
-  unsigned char write_bl_len_high : 2;
-  unsigned char r2w_factor : 3;
-  unsigned char reserved3 : 2;
-  unsigned char wp_grp_enable : 1;
-  // byte 13
-  unsigned char reserved4 : 5;
-  unsigned char write_partial : 1;
-  unsigned char write_bl_len_low : 2;
-  // byte 14
-  unsigned char reserved5: 2;
-  unsigned char file_format : 2;
-  unsigned char tmp_write_protect : 1;
-  unsigned char perm_write_protect : 1;
-  unsigned char copy : 1;
-  /** Indicates the file format on the card */
-  unsigned char file_format_grp : 1;
-  // byte 15
-  unsigned char always1 : 1;
-  unsigned char crc : 7;
-} __attribute__((packed)) csd1_t;
-
-//==============================================================================
-/**
- * \class CSDV2
- * \brief CSD register for version 2.00 cards.
- */
-typedef struct CSDV2 {
-  // byte 0
-  unsigned char reserved1 : 6;
-  unsigned char csd_ver : 2;
-  // byte 1
-  /** fixed to 0X0E */
-  unsigned char taac;
-  // byte 2
-  /** fixed to 0 */
-  unsigned char nsac;
-  // byte 3
-  unsigned char tran_speed;
-  // byte 4
-  unsigned char ccc_high;
-  // byte 5
-  /** This field is fixed to 9h, which indicates READ_BL_LEN=512 Byte */
-  unsigned char read_bl_len : 4;
-  unsigned char ccc_low : 4;
-  // byte 6
-  /** not used */
-  unsigned char reserved2 : 4;
-  unsigned char dsr_imp : 1;
-  /** fixed to 0 */
-  unsigned char read_blk_misalign : 1;
-  /** fixed to 0 */
-  unsigned char write_blk_misalign : 1;
-  /** fixed to 0 - no partial read */
-  unsigned char read_bl_partial : 1;
-  // byte 7
-  /** high part of card size */
-  unsigned char c_size_high : 6;
-  /** not used */
-  unsigned char reserved3 : 2;
-  // byte 8
-  /** middle part of card size */
-  unsigned char c_size_mid;
-  // byte 9
-  /** low part of card size */
-  unsigned char c_size_low;
-  // byte 10
-  /** sector size is fixed at 64 KB */
-  unsigned char sector_size_high : 6;
-  /** fixed to 1 - erase single is supported */
-  unsigned char erase_blk_en : 1;
-  /** not used */
-  unsigned char reserved4 : 1;
-  // byte 11
-  unsigned char wp_grp_size : 7;
-  /** sector size is fixed at 64 KB */
-  unsigned char sector_size_low : 1;
-  // byte 12
-  /** write_bl_len fixed for 512 byte blocks */
-  unsigned char write_bl_len_high : 2;
-  /** fixed value of 2 */
-  unsigned char r2w_factor : 3;
-  /** not used */
-  unsigned char reserved5 : 2;
-  /** fixed value of 0 - no write protect groups */
-  unsigned char wp_grp_enable : 1;
-  // byte 13
-  unsigned char reserved6 : 5;
-  /** always zero - no partial block read*/
-  unsigned char write_partial : 1;
-  /** write_bl_len fixed for 512 byte blocks */
-  unsigned char write_bl_len_low : 2;
-  // byte 14
-  unsigned char reserved7: 2;
-  /** Do not use always 0 */
-  unsigned char file_format : 2;
-  unsigned char tmp_write_protect : 1;
-  unsigned char perm_write_protect : 1;
-  unsigned char copy : 1;
-  /** Do not use always 0 */
-  unsigned char file_format_grp : 1;
-  // byte 15
-  /** not used always 1 */
-  unsigned char always1 : 1;
-  /** checksum */
-  unsigned char crc : 7;
-} __attribute__((packed)) csd2_t;
-
-//==============================================================================
-/**
- * \class csd_t
- * \brief Union of old and new style CSD register.
- */
-union csd_t {
-  csd1_t v1;
-  csd2_t v2;
+    // manufacturer ID       [0]
+    // OEM/Application ID    [1:2]
+    // Product Name          [3:7]
+    // product revision      [8]
+    // Product Serial Number [9:12]
+    // manufacturing Date    [13:14]
+    // CRC7 checksum         [15]
+    std::array<uint8_t, 16> raw;
 };
 
-static_assert(sizeof(csd1_t) == 16);
-static_assert(sizeof(csd2_t) == 16);
-static_assert(sizeof(csd_t)  == 16);
+static_assert(sizeof(CID) == 16, "CID response must be 16 bytes!");
 
-//-----------------------------------------------------------------------------
-inline uint32_t sdCardCapacity(csd_t* csd) {
-  if (csd->v1.csd_ver == 0) {
-    uint8_t read_bl_len = csd->v1.read_bl_len;
-    uint16_t c_size = (csd->v1.c_size_high << 10)
-                      | (csd->v1.c_size_mid << 2) | csd->v1.c_size_low;
-    uint8_t c_size_mult = (csd->v1.c_size_mult_high << 1)
-                          | csd->v1.c_size_mult_low;
-    return (uint32_t)(c_size + 1) << (c_size_mult + read_bl_len - 7);
-  } else if (csd->v2.csd_ver == 1) {
-    uint32_t c_size = 0X10000L * csd->v2.c_size_high + 0X100L
-                      * (uint32_t)csd->v2.c_size_mid + csd->v2.c_size_low;
-    return (c_size + 1) << 10;
-  } else {
-    return 0;
-  }
-}
+struct CSD {
+    /// check the version of the CSD structure. TRUE if it is a v2 CSD, FALSE if it is a v1 CSD
+    constexpr bool csdv2() const { return raw[0]&0xC0; }
+    /// defines the asynchronous part of the data access time
+    constexpr uint8_t taac() const { return raw[1]; }
+    /// Defines the worst case for the clock-dependant factor of the data access time
+    constexpr uint8_t nsac() const { return raw[2]; }
+    /// defines the max transfer rate for one data line according to table in the specification
+    constexpr uint8_t transferSpeed() const { return raw[3]; }
+    /// defines the compatable SD classes. Each bit represents a class. see the specification.
+    constexpr uint_least16_t ccc() const { return (((uint16_t)raw[4])<<4) | ((raw[5]&0xF0)>>4); }
+
+    /// the maxiumum read data block length. In set { 512, 1024, 2048 }
+    constexpr uint_least16_t readBlockLength() const { return 1<<(raw[5] & 0x0F); }
+    /// partial block read is available (ALWAYS TRUE in SD card)
+    constexpr bool readBlockPartial() const { return raw[6] & 0x80; }
+    /// TRUE if the data block to be written by one command can be spread over more than one physical block of the memory device
+    constexpr bool writeBlockMisaligned() const { return raw[6] & 0x40; }
+    /// TRUE if the data block to be read by one command can be spread over more than one physical block of the memory device
+    constexpr bool readBlockMisaligned() const { return raw[6] & 0x20; }
+    /// TRUE if the configurable driver stage is integrated on the card.
+    constexpr bool DSRImplemented() const { return raw[6] & 0x10; }
+
+    /// the device size (as a raw value) used in conjunction with cSizeMulti to get the block count.
+    uint32_t cSize() const {
+        if(csdv2()) { // CSD version 2
+            return (((uint32_t)(raw[7]&0x3F))<<16) | (((uint32_t)(raw[8]))<<8) | (raw[9]);
+        }
+        else { // CSD version 1
+            return (((uint32_t)(raw[6]&0x03))<<10) | ((raw[7])<<2) | ((raw[8])>>6);
+        }
+    }
+
+    /// the size multiplyer, used to find the number of blocks on the device
+    uint_least16_t cSizeMult() const {
+        const uint16_t exponent = ((raw[9]&0x03)<<1) | ((raw[10]&0x80)>>7);
+        return 1 << (exponent+2);
+    }
+
+    /// returns the number of blocks on the device. The size can be found by multiplying this by readBlockLenth()
+    uint32_t blockCount() const {
+        if(csdv2()) {
+            return (cSize() + 1) << 10;
+        }
+        else {
+            return (cSize() + 1) * cSizeMult();
+        }
+    }
+
+    /// returns the card capacity in bytes
+    uint32_t cardCapacity() const {
+        return blockCount() * readBlockLength();
+    }
+
+    /// TRUE if device can erase at the block level. FALSE if erasure must be at the sector level
+    constexpr bool eraseBlockEnabled() const { return raw[10] & 0x40; }
+    /// the number of write blocks (WRITE_BL_LEN) that make up an erasable sector
+    constexpr uint8_t sectorSize() const { return (((raw[10]&0x3F)<<1) | ((raw[11]&0x80)>>7)) + 1; }
+    /// The size of a write protected group in sectors.
+    constexpr uint8_t wpGroupSize() const { return (raw[11] & 0x7F)+1; }
+    /// FALSE if no group write protection possible
+    constexpr bool wpGroupEnable() const { return raw[12] & 0x80; }
+    /// the typical block program time as a multiple of the read access time. power of two between 1 and 32.
+    constexpr uint8_t r2wFactor() const { return 1<<((raw[12] & 0x1C)>>2); }
+
+    /// the maxiumum write data block length. In set { 512, 1024, 2048 } and should match read block length
+    constexpr uint8_t writeBlockLength() const { return 1 << (((raw[12]&0x03)<<2) | ((raw[13])&0xC0)>>6); }
+
+    /// TRUE if partial block sizes can be used in block write commands.
+    /// FALSE if only WRITE_BL_LEN and partial derivatives, in resolution of 512 bytes, can be used for writing
+    constexpr bool writeBlockPartial() const { return raw[13]&0x20; }
+    /// Indicates the selected group of file formats according to the specification
+    constexpr bool fileFormatGroup() const { return raw[14] & 0x80; }
+    /// TRUE if the contents have been copied (OTP products sold to consumers)
+    constexpr bool copy() const { return raw[14] & 0x40; }
+    /// TRUE if all write and erase commands are permanently disabled
+    constexpr bool permWriteProtect() const { return raw[14] & 0x20; }
+    /// TRUE if all write and erase commands are temporarily disabled
+    constexpr bool tempWriteProtect() const { return raw[14] & 0x10; }
+    /// Indicates the file format on the card according to table 5-15 in the SD specification
+    constexpr bool fileFormat() const { return raw[14] & 0x08; }
+    /// CRC for the contents according to chapter 4.5 in the SD specification
+    constexpr uint8_t crc7() const { return raw[15]>>1; }
+
+    std::array<uint8_t, 16> raw;    //< raw data of the CSD register
+};
+static_assert(sizeof(CSD) == 16, "CSD response must be 16 bytes!");
 
 }   // namespace sd
 
