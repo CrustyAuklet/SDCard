@@ -1,6 +1,5 @@
 /**
- * Copyright (c) 2011-2018 Bill Greiman
- * This file is part of the SdFat library for SD memory cards.
+ * Copyright (c) 2019 Ethan Slattery
  *
  * MIT License
  *
@@ -26,73 +25,29 @@
 #define SDCARD_INFO_H
 #include <cstdint>
 
-
 namespace sd {
 
-// Based on the document:
-//
-// SD Specifications
-// Part 1
-// Physical Layer
-// Simplified Specification
-// Version 5.00
-// Aug 10, 2016
-//
-// https://www.sdcard.org/downloads/pls/
-//------------------------------------------------------------------------------
-// SD card errors
-// See the SD Specification for command info.
 enum class ErrorCode : uint8_t {
     NONE = 0,
 
-    // Basic commands and switch command.
-    CMD0 = 0X20,
-    CMD2,
-    CMD3,
-    CMD6,
-    CMD7,
-    CMD8,
-    CMD9,
-    CMD10,
-    CMD12,
-    CMD13,
-
-    // Read, write, erase, and extension commands.
-    CMD17 = 0X30,
-    CMD18,
-    CMD24,
-    CMD25,
-    CMD32,
-    CMD33,
-    CMD38,
-    CMD58,
-    CMD59,
-
-    // Application specific commands.
-    ACMD6 = 0X40,
-    ACMD13,
-    ACMD23,
-    ACMD41,
-
-    // Read/write errors
-    READ = 0X50,
-    READ_CRC,
-    READ_FIFO,
-    READ_REG,
-    READ_START,
+    // timeouts
     READ_TIMEOUT,
-    STOP_TRAN,
-    WRITE,
-    WRITE_FIFO,
-    WRITE_START,
-    FLASH_PROGRAMMING,
     WRITE_TIMEOUT,
-
-    // Misc errors.
-    DMA = 0X60,
-    ERASE,
-    ERASE_SINGLE_BLOCK,
+    CMD_TIMEOUT,
     ERASE_TIMEOUT,
+
+    // Read errors
+    READ,
+    READ_BAD_ADDR,
+    READ_CRC,
+
+    // Write errors
+    WRITE,
+    WRITE_BAD_ADDR,
+    WRITE_CRC,
+
+    // Functional Errors
+    DMA,
     INIT_NOT_CALLED,
     FUNCTION_NOT_SUPPORTED
 };
@@ -104,7 +59,6 @@ enum class CardType : uint8_t {
     SDHC = 3     //< High Capacity SD card
 };
 
-// SD card commands
 enum class SDCMD : uint8_t {
     CMD0   = 0x00,    //< GO_IDLE_STATE - init card in spi mode if CS low
     CMD2   = 0x02,    //< ALL_SEND_CID - Asks any card to send the CID.
@@ -129,23 +83,11 @@ enum class SDCMD : uint8_t {
     CMD59  = 0x3B,    //< CRC_ON_OFF - enable or disable CRC checking
     ACMD6  = 0x06,    //< SET_BUS_WIDTH - Defines the data bus width for data transfer.
     ACMD13 = 0x0D,    //< SD_STATUS - Send the SD Status.
-    ACMD22 = 0x16,
+    ACMD22 = 0x16,    //< SEND_NUM_WR_BLOCKS - Send the number of the written (without errors) write blocks.
     ACMD23 = 0x17,    //< SET_WR_BLK_ERASE_COUNT - Set the number of write blocks to be pre-erased before writing
     ACMD41 = 0x29,    //< SD_SEND_OP_COMD - Sends host capacity support information and activates the card's initialization process
 };
 
-/** start data token for read or write single block*/
-constexpr uint8_t DATA_START_BLOCK = 0xFE;
-/** stop token for write multiple blocks*/
-constexpr uint8_t STOP_TRAN_TOKEN = 0xFD;
-/** start data token for write multiple blocks*/
-constexpr uint8_t WRITE_MULTIPLE_TOKEN = 0xFC;
-/** mask for data response tokens after a write block operation */
-constexpr uint8_t DATA_RES_MASK = 0x1F;
-/** write data accepted token */
-constexpr uint8_t DATA_RES_ACCEPTED = 0x05;
-
-// CARD_STATUS
 struct CardStatus {
     explicit CardStatus(const uint8_t s) : rawStatus(s) {}
     explicit CardStatus() = default;
@@ -216,7 +158,6 @@ struct CardStatus {
 
     uint32_t rawStatus;     //< the raw status received
 };
-
 static_assert(sizeof(CardStatus) == 4, "CardStatus response must be 4 bytes!");
 
 struct Response1 {
@@ -239,8 +180,28 @@ struct Response1 {
     
     uint8_t rawStatus;  //< raw status from device
 };
-
 static_assert(sizeof(Response1) == 1, "Response1 must be 1 byte!");
+
+struct Response2 {
+    explicit Response2(const uint8_t s) : rawStatus(s) {}
+    explicit Response2() : rawStatus(0x80) {}
+    void operator=(const uint8_t v) { rawStatus = v; }
+
+    constexpr bool outOfRange() const       { return rawStatus & (1UL<<7); }
+    constexpr bool csdOverwrite() const     { return rawStatus & (1UL<<7); }
+    constexpr bool eraseParam() const       { return rawStatus & (1UL<<6); }
+    constexpr bool wpViolation() const      { return rawStatus & (1UL<<5); }
+    constexpr bool eccFailed() const        { return rawStatus & (1UL<<4); }
+    constexpr bool ccError() const          { return rawStatus & (1UL<<3); }
+    constexpr bool error() const            { return rawStatus & (1UL<<2); }
+    constexpr bool wpEraseSkip() const      { return rawStatus & (1UL<<1); }
+    constexpr bool lockUnlockFailed() const { return rawStatus & (1UL<<1); }
+    constexpr bool cardLocked() const       { return rawStatus & (1UL<<0); }
+    operator bool() const                   { return rawStatus == 0x00; }
+
+    uint8_t rawStatus;  //< raw status from device
+};
+static_assert(sizeof(Response2) == 1, "Response2 must be 1 byte!");
 
 struct OCR {
     constexpr bool pwrUpStatus() const      { return raw[0] & (1UL<<7); }
@@ -251,12 +212,8 @@ struct OCR {
 
     std::array<uint8_t, 4> raw; //< raw OCR status
 };
-
 static_assert(sizeof(OCR) == 4, "OCR response must be 4 bytes!");
 
-/**
- * @brief Card IDentification (CID) register.
- */
 struct CID {
     /// Manufacturer ID
     constexpr uint8_t mid() const { return raw[0]; }
@@ -297,7 +254,6 @@ struct CID {
     // CRC7 checksum         [15]
     std::array<uint8_t, 16> raw;
 };
-
 static_assert(sizeof(CID) == 16, "CID response must be 16 bytes!");
 
 struct CSD {

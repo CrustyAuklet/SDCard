@@ -16,9 +16,7 @@
 SPIDriver spiTester;
 std::string SpiDriverPort;
 
-DSTATUS stat = STA_NOINIT;
-
-sd::SpiCard<SPIShim> sdcard;
+sd::SpiCard<SPIShim, sd::noCRC> sdcard;
 
 int test_diskio (
         BYTE pdrv,      /* Physical drive number to be checked (all data on the drive will be lost) */
@@ -65,14 +63,15 @@ int main(int argc, char *argv[])
     printf("CardSize: %d\n", csd->cardCapacity());
 
     /* Check function/compatibility of the physical drive #0 */
-//    rc = test_diskio(0, 3, buff, sizeof buff);
-//
-//    if (rc) {
-//        printf("Sorry the function/compatibility test failed. (rc=%d)\nFatFs will not work with this disk driver.\n", rc);
-//    } else {
+    rc = test_diskio(0, 3, buff, sizeof buff);
 
+        if (rc) {
+            printf("Sorry the function/compatibility test failed. (rc=%d)\nFatFs will not work with this disk driver.\n", rc);
+        }
+        else {
+            printf("Congratulations! The disk driver works well.\n");
+        }
 
-//        printf("Congratulations! The disk driver works well.\n");
 //        BYTE Buff[4096];	/* Working buffer */
 //        FATFS FatFs;		/* FatFs work area needed for each volume */
 //        FIL Fil;			/* File object needed for each open file */
@@ -94,10 +93,11 @@ int main(int argc, char *argv[])
 //            f_close(&Fil);								/* Close the file */
 //
 //        }
-////    }
 
     return 0;
 }
+
+static DSTATUS stat = STA_NOINIT;
 
 DSTATUS disk_status ( BYTE pdrv ) {
     (void)pdrv;
@@ -123,15 +123,8 @@ DRESULT disk_read (
 )
 {
     (void)pdrv;
-    DRESULT retval = RES_OK;
-    for(UINT i = 0; i < count; ++i) {
-        if(1 != sdcard.readBlock(sector, buff) ){
-            retval = RES_ERROR;
-        }
-        sector++;
-        buff += 512;
-    }
-    return retval;
+    const ssize_t err = sdcard.readBlocks(sector, buff, count);
+    return err == count ? RES_OK : RES_ERROR;
 }
 
 DRESULT disk_write (
@@ -142,15 +135,9 @@ DRESULT disk_write (
 )
 {
     (void)pdrv;
-    DRESULT retval = RES_OK;
-    for(UINT i = 0; i < count; ++i) {
-        if(1 != sdcard.writeBlock(sector, buff) ){
-            retval = RES_ERROR;
-        }
-        sector++;
-        buff += 512;
-    }
-    return retval;
+    const ssize_t err = sdcard.writeBlocks(sector, buff, count);
+    return err == count ? RES_OK : RES_ERROR;
+
 }
 
 DRESULT disk_ioctl (
@@ -164,9 +151,18 @@ DRESULT disk_ioctl (
         case CTRL_SYNC :
             break;
         case GET_SECTOR_COUNT :
-            *((DWORD*)buff) = *(sdcard.cardCapacity());
-            break;
+            {
+                if(auto cap = sdcard.cardCapacity(); cap.has_value()) {
+                    *((DWORD*)buff) = *cap;
+                }
+                else {
+                    *((DWORD*)buff) = 0;
+                }
+                break;
+            }
         case GET_SECTOR_SIZE :
+            *((DWORD*)buff) = 512;
+            break;
         case GET_BLOCK_SIZE :
             *((DWORD*)buff) = 1;
             break;

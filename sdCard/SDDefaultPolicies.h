@@ -9,6 +9,13 @@
 
 namespace sd {
 
+    struct noCRC {
+        static constexpr bool useCRC7  = false;
+        static constexpr bool useCRC16 = false;
+        uint8_t getCRC7(const uint8_t *data, const uint8_t n) { return 0xFF; }
+        uint16_t CRC_CCITT(const uint8_t* data, const size_t n) { return 0xFFFF; }
+    };
+
     struct ShiftedCRC {
         static constexpr bool useCRC7  = false;
         static constexpr bool useCRC16 = true;
